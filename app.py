@@ -30,6 +30,12 @@ handler = WebhookHandler(os.environ.get('LINE_CHANNEL_SECRET'))
 # Claude API初期化
 claude_client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
 
+# セキュリティ: 許可されたユーザーIDのみ使用可能
+# 環境変数 ALLOWED_USER_IDS にカンマ区切りで設定（例: "U1234,U5678"）
+# 空の場合は全ユーザー許可（初回セットアップ用）
+allowed_users_str = os.environ.get('ALLOWED_USER_IDS', '')
+ALLOWED_USER_IDS = [uid.strip() for uid in allowed_users_str.split(',') if uid.strip()]
+
 # システムプロンプト（Claudeの役割を定義）
 SYSTEM_PROMPT = """あなたはプログラミングアシスタントのClaudeです。
 ユーザーからの開発依頼に対して、完全なコードを生成して返します。
@@ -73,9 +79,18 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     """LINEメッセージ受信時の処理"""
+    user_id = event.source.user_id
     user_message = event.message.text
+
+    logger.info(f"User ID: {user_id}")
     logger.info(f"Received message: {user_message}")
-    
+
+    # セキュリティチェック: 許可されたユーザーのみ処理
+    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        logger.warning(f"Unauthorized user attempted access: {user_id}")
+        # 不正なユーザーには何も返さない（セキュリティのため）
+        return
+
     try:
         # Claude APIに質問
         response = claude_client.messages.create(
