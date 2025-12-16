@@ -29,9 +29,9 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ.get('LINE_CHANNEL_ACCESS_TOKEN'))
 handler = WebhookHandler(os.environ.get('LINE_CHANNEL_SECRET'))
 
-# Gemini API初期化
+# Gemini API初期化（無料: gemini-2.5-flash）
 genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
-gemini_model = genai.GenerativeModel('gemini-pro')
+gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 
 # セキュリティ: 許可されたユーザーIDのみ使用可能
 # 環境変数 ALLOWED_USER_IDS にカンマ区切りで設定（例: "U1234,U5678"）
