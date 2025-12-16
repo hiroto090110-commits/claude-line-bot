@@ -69,7 +69,14 @@ SYSTEM_PROMPT = """あなたはプログラミングアシスタントです。
 @app.route("/")
 def home():
     """ヘルスチェック"""
-    return "Gemini LINE Bot is running! 💰 完全無料 + スケジュール機能", 200
+    # 環境変数チェック
+    env_status = {
+        "LINE_CHANNEL_ACCESS_TOKEN": "✅" if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') else "❌",
+        "LINE_CHANNEL_SECRET": "✅" if os.environ.get('LINE_CHANNEL_SECRET') else "❌",
+        "GEMINI_API_KEY": "✅" if os.environ.get('GEMINI_API_KEY') else "❌",
+    }
+    status_text = " | ".join([f"{k}: {v}" for k, v in env_status.items()])
+    return f"Gemini LINE Bot is running! 💰 完全無料 + スケジュール機能<br><br>環境変数: {status_text}", 200
 
 
 @app.route("/download/<file_id>")
