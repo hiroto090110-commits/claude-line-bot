@@ -206,7 +206,15 @@ def handle_message(event):
 
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
-        error_message = f"エラーが発生しました:\n{str(e)}"
+
+        # Gemini APIレート制限エラーの特別処理
+        if "ResourceExhausted" in str(type(e)) or "429" in str(e):
+            error_message = "⏳ 只今アクセスが集中しています。\n\n" \
+                          "Gemini APIの無料枠（1分間に5リクエスト）に達しました。\n" \
+                          "30秒ほど待ってから再度お試しください。"
+        else:
+            error_message = f"エラーが発生しました:\n{str(e)}"
+
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=error_message)
