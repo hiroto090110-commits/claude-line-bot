@@ -50,6 +50,11 @@ gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 allowed_users_str = os.environ.get('ALLOWED_USER_IDS', '')
 ALLOWED_USER_IDS = [uid.strip() for uid in allowed_users_str.split(',') if uid.strip()]
 
+# 会話履歴管理（メモリベース）
+# 注意: Render無料プランでは再デプロイ時に消去されます
+conversation_history = {}
+MAX_HISTORY_PER_USER = 10  # ユーザーごとに保持する会話数
+
 # システムプロンプト（Geminiの役割を定義）
 SYSTEM_PROMPT = """あなたは親しみやすいAIアシスタントです。
 ユーザーとの自然な会話を通じて、質問に答えたり、アドバイスをしたり、雑談をしたりします。
@@ -148,12 +153,40 @@ def handle_message(event):
         # スケジュール機能は一時凍結
         # 全てのメッセージをGeminiとの汎用会話として処理
 
-        # 通常のGemini対話
-        full_prompt = f"{SYSTEM_PROMPT}\n\nユーザーの質問: {user_message}"
+        # 会話履歴を取得
+        if user_id not in conversation_history:
+            conversation_history[user_id] = []
+
+        # 過去の会話履歴をテキスト化
+        history_text = ""
+        if conversation_history[user_id]:
+            history_text = "\n\n過去の会話:\n"
+            for msg in conversation_history[user_id]:
+                history_text += f"{msg['role']}: {msg['content']}\n"
+
+        # Gemini対話
+        full_prompt = f"{SYSTEM_PROMPT}{history_text}\n\n最新の質問: {user_message}"
         response = gemini_model.generate_content(full_prompt)
 
         # Gemini の返答を取得
         reply_text = response.text
+
+        # 会話履歴に追加
+        conversation_history[user_id].append({
+            'role': 'ユーザー',
+            'content': user_message
+        })
+        conversation_history[user_id].append({
+            'role': 'アシスタント',
+            'content': reply_text
+        })
+
+        # 古い履歴を削除（メモリ節約）
+        if len(conversation_history[user_id]) > MAX_HISTORY_PER_USER * 2:
+            # 最新10往復（20メッセージ）のみ保持
+            conversation_history[user_id] = conversation_history[user_id][-MAX_HISTORY_PER_USER * 2:]
+
+        logger.info(f"Conversation history length for {user_id}: {len(conversation_history[user_id])}")
 
         # LINE文字数制限（5000文字）を考慮して分割
         if len(reply_text) > 4500:
