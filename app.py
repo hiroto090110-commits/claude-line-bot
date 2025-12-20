@@ -21,9 +21,9 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import google.generativeai as genai
 
-# スケジュール機能
-from schedule_parser import parse_schedule
-from ics_generator import generate_ics, format_event_message
+# スケジュール機能（一時凍結）
+# from schedule_parser import parse_schedule
+# from ics_generator import generate_ics, format_event_message
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO)
@@ -51,18 +51,18 @@ allowed_users_str = os.environ.get('ALLOWED_USER_IDS', '')
 ALLOWED_USER_IDS = [uid.strip() for uid in allowed_users_str.split(',') if uid.strip()]
 
 # システムプロンプト（Geminiの役割を定義）
-SYSTEM_PROMPT = """あなたはプログラミングアシスタントです。
-ユーザーからの開発依頼に対して、完全なコードを生成して返します。
+SYSTEM_PROMPT = """あなたは親しみやすいAIアシスタントです。
+ユーザーとの自然な会話を通じて、質問に答えたり、アドバイスをしたり、雑談をしたりします。
 
-回答の形式:
-1. 簡潔な説明（1-2行）
-2. コードブロック（必要に応じて）
-3. 使い方・注意点（簡潔に）
+回答のスタイル:
+- 親しみやすく、自然な日本語で回答
+- 質問には具体的かつ分かりやすく答える
+- プログラミングやコード生成にも対応
+- 雑談も歓迎
 
 制約:
 - 回答は3000文字以内（LINE制限）
-- コードは実装可能な完全な形で提供
-- 専門用語は必要最小限に
+- 専門的な内容でも分かりやすく説明
 """
 
 
@@ -76,7 +76,7 @@ def home():
         "GEMINI_API_KEY": "✅" if os.environ.get('GEMINI_API_KEY') else "❌",
     }
     status_text = " | ".join([f"{k}: {v}" for k, v in env_status.items()])
-    return f"Gemini LINE Bot is running! 💰 完全無料 + スケジュール機能<br><br>環境変数: {status_text}", 200
+    return f"Gemini LINE Bot is running! 💰 完全無料<br>汎用会話 + @メンション対応<br><br>環境変数: {status_text}", 200
 
 
 @app.route("/download/<file_id>")
@@ -145,71 +145,33 @@ def handle_message(event):
         return
 
     try:
-        # スケジュール関連キーワード検出
-        schedule_keywords = ['スケジュール', '予定', 'カレンダー', '登録', '作成']
-        is_schedule_request = any(keyword in user_message for keyword in schedule_keywords)
+        # スケジュール機能は一時凍結
+        # 全てのメッセージをGeminiとの汎用会話として処理
 
-        if is_schedule_request:
-            # スケジュール解析
-            logger.info("Parsing schedule...")
-            result = parse_schedule(user_message, gemini_model)
+        # 通常のGemini対話
+        full_prompt = f"{SYSTEM_PROMPT}\n\nユーザーの質問: {user_message}"
+        response = gemini_model.generate_content(full_prompt)
 
-            if result['success']:
-                events = result['events']
+        # Gemini の返答を取得
+        reply_text = response.text
 
-                # ICSファイル生成
-                ics_data = generate_ics(events)
-
-                # 一時ファイルに保存
-                file_id = str(uuid.uuid4())
-                file_path = TEMP_DIR / f"{file_id}.ics"
-                file_path.write_bytes(ics_data)
-
-                # ダウンロードURL生成
-                download_url = f"https://{request.host}/download/{file_id}"
-
-                # フォーマット済みメッセージ + ダウンロードリンク
-                event_message = format_event_message(events)
-                reply_text = f"{event_message}\n📥 カレンダーに追加:\n{download_url}\n\n※ リンクをタップするとカレンダーアプリで開きます"
-
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=reply_text)
+        # LINE文字数制限（5000文字）を考慮して分割
+        if len(reply_text) > 4500:
+            # 長い場合は分割して送信
+            parts = split_message(reply_text, 4500)
+            for part in parts:
+                line_bot_api.push_message(
+                    event.source.user_id,
+                    TextSendMessage(text=part)
                 )
-
-                logger.info(f"Schedule created: {file_id}")
-            else:
-                # スケジュール解析失敗
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=result['error'])
-                )
-
         else:
-            # 通常のGemini対話
-            full_prompt = f"{SYSTEM_PROMPT}\n\nユーザーの質問: {user_message}"
-            response = gemini_model.generate_content(full_prompt)
+            # LINEで返信
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=reply_text)
+            )
 
-            # Gemini の返答を取得
-            reply_text = response.text
-
-            # LINE文字数制限（5000文字）を考慮して分割
-            if len(reply_text) > 4500:
-                # 長い場合は分割して送信
-                parts = split_message(reply_text, 4500)
-                for part in parts:
-                    line_bot_api.push_message(
-                        event.source.user_id,
-                        TextSendMessage(text=part)
-                    )
-            else:
-                # LINEで返信
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=reply_text)
-                )
-
-            logger.info("Reply sent successfully")
+        logger.info("Reply sent successfully")
 
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
