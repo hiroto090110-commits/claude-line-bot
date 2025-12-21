@@ -209,8 +209,22 @@ def handle_message(event):
         # メンション部分を削除
         user_message = user_message.split(maxsplit=1)[-1] if len(user_message.split()) > 1 else user_message
 
+    # 会話の識別子を生成（グループごとに会話を分別）
+    if source_type == 'user':
+        # 個人チャット: user_idをそのまま使う
+        conversation_id = user_id
+    elif source_type == 'group':
+        # グループチャット: group_idを使う
+        conversation_id = event.source.group_id
+    elif source_type == 'room':
+        # 複数人トーク: room_idを使う
+        conversation_id = event.source.room_id
+    else:
+        conversation_id = user_id
+
     logger.info(f"User ID: {user_id}")
     logger.info(f"Source type: {source_type}")
+    logger.info(f"Conversation ID: {conversation_id}")
     logger.info(f"Received message: {user_message}")
 
     # セキュリティチェック: 許可されたユーザーのみ処理
@@ -223,8 +237,8 @@ def handle_message(event):
         # スケジュール機能は一時凍結
         # 全てのメッセージをGeminiとの汎用会話として処理
 
-        # データベースから会話履歴を取得
-        history = get_conversation_history(user_id, MAX_HISTORY_MESSAGES)
+        # データベースから会話履歴を取得（グループごとに分別）
+        history = get_conversation_history(conversation_id, MAX_HISTORY_MESSAGES)
 
         # 過去の会話履歴をテキスト化
         history_text = ""
@@ -240,11 +254,11 @@ def handle_message(event):
         # Gemini の返答を取得
         reply_text = response.text
 
-        # 会話履歴をデータベースに保存
-        save_conversation(user_id, 'ユーザー', user_message)
-        save_conversation(user_id, 'アシスタント', reply_text)
+        # 会話履歴をデータベースに保存（グループごとに分別）
+        save_conversation(conversation_id, 'ユーザー', user_message)
+        save_conversation(conversation_id, 'アシスタント', reply_text)
 
-        logger.info(f"Saved conversation for user {user_id}")
+        logger.info(f"Saved conversation for conversation_id {conversation_id}")
 
         # LINE文字数制限（5000文字）を考慮して分割
         if len(reply_text) > 4500:
