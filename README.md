@@ -15,15 +15,16 @@
 - グループでは@メンション時のみ反応
 - 個人チャットでは常時応答
 
-### 3. 会話履歴機能（メモリベース）
-- 過去10往復（20メッセージ）の会話を記憶
-- 文脈を考慮した自然な会話が可能
-- **注意**: 再デプロイ時や15分以上の非アクティブで履歴はリセット
+### 3. 会話履歴機能（データベース永続化）
+- **全ての会話を永続的に保存** (Supabaseデータベース使用)
+- AIは過去の会話を参照して文脈を理解
+- 最新20メッセージ（10往復）をGeminiに送信
+- 再デプロイやアプリ再起動でも履歴は保持される
 
 ### 制限事項
 - **レート制限**: 1分間に5リクエストまで（Gemini無料枠）
 - 短時間に複数メッセージを送ると30秒待機が必要
-- **履歴保持**: メモリベース（再起動で消去）
+- **データベース容量**: Supabase無料枠500MB（約100万メッセージ保存可能）
 
 ### 凍結中の機能
 - ~~スケジュール機能~~（一時凍結）
@@ -61,13 +62,36 @@
    - **Channel Secret**: 「チャネル基本設定」タブにあります
    - **Channel Access Token**: 「Messaging API設定」タブで「発行」ボタンをクリック
 
-### 4. Anthropic API キー取得
+### 4. Gemini API キー取得
 
-1. [Anthropic Console](https://console.anthropic.com/) にアクセス
-2. 「API Keys」→「Create Key」
+1. [Google AI Studio](https://makersuite.google.com/app/apikey) にアクセス
+2. 「Create API Key」をクリック
 3. キーをコピーして保存
 
-### 5. Render.com でデプロイ
+### 5. Supabase データベースセットアップ（永続的会話履歴用）
+
+**詳細な手順は `SUPABASE_SETUP.md` を参照してください。**
+
+簡易手順:
+1. [Supabase](https://supabase.com/) にアクセスし、GitHubアカウントでサインアップ
+2. 新規プロジェクト作成（無料プラン、Tokyo リージョン推奨）
+3. SQL Editorで以下を実行:
+```sql
+CREATE TABLE conversation_history (
+  id BIGSERIAL PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX idx_user_id ON conversation_history(user_id);
+CREATE INDEX idx_created_at ON conversation_history(created_at DESC);
+```
+4. Settings → API で以下を取得:
+   - Project URL (例: `https://xxx.supabase.co`)
+   - anon public key (例: `eyJhbGci...`)
+
+### 6. Render.com でデプロイ
 
 1. [Render.com](https://render.com/) にアクセス
 2. GitHubアカウントでサインアップ
@@ -78,11 +102,13 @@
 6. 環境変数を設定:
    - `LINE_CHANNEL_ACCESS_TOKEN`: LINEのChannel Access Token
    - `LINE_CHANNEL_SECRET`: LINEのChannel Secret
-   - `ANTHROPIC_API_KEY`: AnthropicのAPI Key
+   - `GEMINI_API_KEY`: Gemini API Key
+   - `SUPABASE_URL`: SupabaseのProject URL (例: `https://xxx.supabase.co`)
+   - `SUPABASE_KEY`: Supabaseのanon public key
 
-7. デプロイ完了後、URLをコピー（例: `https://claude-line-bot.onrender.com`）
+7. デプロイ完了後、URLをコピー（例: `https://gemini-line-bot.onrender.com`）
 
-### 6. LINE Webhook URL 設定
+### 7. LINE Webhook URL 設定
 
 1. LINE Developers Consoleに戻る
 2. 「Messaging API設定」タブ
@@ -198,6 +224,7 @@ FlaskアプリにGoogle OAuth認証を組み込んで
 - **LINE Messaging API**: 無料（月1000通まで）
 - **Render.com**: 無料プラン（月750時間）
 - **Gemini API**: **完全無料**（月1500リクエストまで）
+- **Supabase**: 無料プラン（500MB、無制限APIリクエスト）
 
 **合計: 0円/月**（個人使用の範囲内）
 

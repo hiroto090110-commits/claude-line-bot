@@ -20,6 +20,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import google.generativeai as genai
+from supabase import create_client, Client
 
 # スケジュール機能（一時凍結）
 # from schedule_parser import parse_schedule
@@ -44,16 +45,28 @@ handler = WebhookHandler(os.environ.get('LINE_CHANNEL_SECRET'))
 genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
 gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 
+# Supabase初期化（会話履歴永続化）
+supabase_url = os.environ.get('SUPABASE_URL')
+supabase_key = os.environ.get('SUPABASE_KEY')
+supabase: Client = None
+
+if supabase_url and supabase_key:
+    try:
+        supabase = create_client(supabase_url, supabase_key)
+        logger.info("Supabase client initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Supabase: {e}")
+else:
+    logger.warning("SUPABASE_URL or SUPABASE_KEY not set. Conversation history will not be saved.")
+
 # セキュリティ: 許可されたユーザーIDのみ使用可能
 # 環境変数 ALLOWED_USER_IDS にカンマ区切りで設定（例: "U1234,U5678"）
 # 空の場合は全ユーザー許可（初回セットアップ用）
 allowed_users_str = os.environ.get('ALLOWED_USER_IDS', '')
 ALLOWED_USER_IDS = [uid.strip() for uid in allowed_users_str.split(',') if uid.strip()]
 
-# 会話履歴管理（メモリベース）
-# 注意: Render無料プランでは再デプロイ時に消去されます
-conversation_history = {}
-MAX_HISTORY_PER_USER = 10  # ユーザーごとに保持する会話数
+# 会話履歴設定
+MAX_HISTORY_MESSAGES = 20  # Geminiに渡す最新会話数（10往復分）
 
 # システムプロンプト（Geminiの役割を定義）
 SYSTEM_PROMPT = """AIアシスタントとして質問に回答します。
@@ -65,6 +78,67 @@ SYSTEM_PROMPT = """AIアシスタントとして質問に回答します。
 
 制約: 3000文字以内
 """
+
+
+def get_conversation_history(user_id: str, limit: int = MAX_HISTORY_MESSAGES) -> list:
+    """
+    データベースから会話履歴を取得
+
+    Args:
+        user_id: LINEユーザーID
+        limit: 取得する最新メッセージ数
+
+    Returns:
+        会話履歴のリスト [{'role': 'ユーザー', 'content': '...'}]
+    """
+    if not supabase:
+        logger.warning("Supabase not initialized. Returning empty history.")
+        return []
+
+    try:
+        # 最新のメッセージをlimit件取得（降順→昇順に変換）
+        response = supabase.table('conversation_history') \
+            .select('role, content') \
+            .eq('user_id', user_id) \
+            .order('created_at', desc=True) \
+            .limit(limit) \
+            .execute()
+
+        # 降順で取得したので、古い順に並び替え
+        history = list(reversed(response.data))
+
+        logger.info(f"Retrieved {len(history)} messages for user {user_id}")
+        return history
+
+    except Exception as e:
+        logger.error(f"Failed to get conversation history: {e}")
+        return []
+
+
+def save_conversation(user_id: str, role: str, content: str):
+    """
+    会話をデータベースに保存
+
+    Args:
+        user_id: LINEユーザーID
+        role: 'ユーザー' または 'アシスタント'
+        content: メッセージ内容
+    """
+    if not supabase:
+        logger.warning("Supabase not initialized. Conversation not saved.")
+        return
+
+    try:
+        supabase.table('conversation_history').insert({
+            'user_id': user_id,
+            'role': role,
+            'content': content
+        }).execute()
+
+        logger.debug(f"Saved {role} message for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to save conversation: {e}")
 
 
 @app.route("/")
@@ -149,15 +223,14 @@ def handle_message(event):
         # スケジュール機能は一時凍結
         # 全てのメッセージをGeminiとの汎用会話として処理
 
-        # 会話履歴を取得
-        if user_id not in conversation_history:
-            conversation_history[user_id] = []
+        # データベースから会話履歴を取得
+        history = get_conversation_history(user_id, MAX_HISTORY_MESSAGES)
 
         # 過去の会話履歴をテキスト化
         history_text = ""
-        if conversation_history[user_id]:
+        if history:
             history_text = "\n\n過去の会話:\n"
-            for msg in conversation_history[user_id]:
+            for msg in history:
                 history_text += f"{msg['role']}: {msg['content']}\n"
 
         # Gemini対話
@@ -167,22 +240,11 @@ def handle_message(event):
         # Gemini の返答を取得
         reply_text = response.text
 
-        # 会話履歴に追加
-        conversation_history[user_id].append({
-            'role': 'ユーザー',
-            'content': user_message
-        })
-        conversation_history[user_id].append({
-            'role': 'アシスタント',
-            'content': reply_text
-        })
+        # 会話履歴をデータベースに保存
+        save_conversation(user_id, 'ユーザー', user_message)
+        save_conversation(user_id, 'アシスタント', reply_text)
 
-        # 古い履歴を削除（メモリ節約）
-        if len(conversation_history[user_id]) > MAX_HISTORY_PER_USER * 2:
-            # 最新10往復（20メッセージ）のみ保持
-            conversation_history[user_id] = conversation_history[user_id][-MAX_HISTORY_PER_USER * 2:]
-
-        logger.info(f"Conversation history length for {user_id}: {len(conversation_history[user_id])}")
+        logger.info(f"Saved conversation for user {user_id}")
 
         # LINE文字数制限（5000文字）を考慮して分割
         if len(reply_text) > 4500:
